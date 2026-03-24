@@ -1,0 +1,110 @@
+name: Deploy Kelos Task
+description: Apply a Kelos Task manifest or build one from workflow inputs.
+
+inputs:
+  kubeconfig:
+    description: Raw kubeconfig content. Leave empty to use the existing kubectl context.
+    required: false
+  namespace:
+    description: Namespace for generated Tasks, or the default namespace used when applying task-file.
+    required: false
+    default: default
+  task-file:
+    description: Path to an existing Kelos Task manifest.
+    required: false
+  task-name:
+    description: Explicit Task name when generating a manifest from inputs.
+    required: false
+  task-name-prefix:
+    description: Prefix for an auto-generated Task name when task-name is omitted.
+    required: false
+    default: kelos-task
+  type:
+    description: Kelos agent type for generated manifests.
+    required: false
+  prompt:
+    description: Task prompt for generated manifests.
+    required: false
+  credentials-secret:
+    description: Secret name for spec.credentials.secretRef.name.
+    required: false
+  credentials-type:
+    description: Credentials type for generated manifests, oauth or api-key.
+    required: false
+    default: oauth
+  model:
+    description: Optional spec.model value.
+    required: false
+  image:
+    description: Optional spec.image override.
+    required: false
+  workspace:
+    description: Optional spec.workspaceRef.name.
+    required: false
+  agent-config:
+    description: Optional spec.agentConfigRef.name.
+    required: false
+  branch:
+    description: Optional spec.branch.
+    required: false
+  depends-on:
+    description: Newline or comma separated spec.dependsOn entries.
+    required: false
+  ttl-seconds-after-finished:
+    description: Optional spec.ttlSecondsAfterFinished integer value.
+    required: false
+  pod-overrides-json:
+    description: JSON object assigned to spec.podOverrides.
+    required: false
+  labels:
+    description: Newline-delimited metadata labels as key=value.
+    required: false
+  annotations:
+    description: Newline-delimited metadata annotations as key=value.
+    required: false
+  wait:
+    description: Wait for the Task to finish.
+    required: false
+    default: "false"
+  timeout-seconds:
+    description: Wait timeout in seconds when wait is enabled.
+    required: false
+    default: "1800"
+  poll-interval-seconds:
+    description: Poll interval in seconds when wait is enabled.
+    required: false
+    default: "10"
+
+outputs:
+  task_name:
+    description: Created or updated Kelos Task name.
+  task_namespace:
+    description: Namespace containing the Task.
+  phase:
+    description: Current or final Task phase.
+  message:
+    description: Current or final Task status message.
+  job_name:
+    description: Backing Kubernetes Job name.
+  pod_name:
+    description: Backing Kubernetes Pod name.
+  branch:
+    description: Parsed status.results branch value.
+  commit:
+    description: Parsed status.results commit value.
+  base_branch:
+    description: Parsed status.results base-branch value.
+  pr:
+    description: Parsed status.results pr value.
+  cost_usd:
+    description: Parsed status.results cost-usd value.
+  input_tokens:
+    description: Parsed status.results input-tokens value.
+  output_tokens:
+    description: Parsed status.results output-tokens value.
+  results_json:
+    description: Raw status.results JSON string.
+
+runs:
+  using: node20
+  main: dist/index.js
