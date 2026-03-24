@@ -1,0 +1,206 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  node-checks:
+    name: Node Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Dist
+        run: npm run build
+
+      - name: Verify Checked-In Dist
+        run: git diff --exit-code -- dist/index.js
+
+      - name: Run Unit Tests
+        run: npm test
+
+      - name: Check Runtime Syntax
+        run: node --check dist/index.js
+
+  action-smoke-structured:
+    name: Action Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Kubectl Stub
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/kubectl" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          if [[ "$1" == "version" && "$2" == "--client" ]]; then
+            echo "Client Version: v1.34.1"
+            exit 0
+          fi
+
+          if [[ "$1" == "apply" ]]; then
+            cat <<'JSON'
+          {"apiVersion":"kelos.dev/v1alpha1","kind":"Task","metadata":{"name":"smoke-task","namespace":"agents"},"status":{"phase":"Pending","results":{}}}
+          JSON
+            exit 0
+          fi
+
+          if [[ "$1" == "get" && "$2" == "tasks.kelos.dev" ]]; then
+            cat <<'JSON'
+          {"apiVersion":"kelos.dev/v1alpha1","kind":"Task","metadata":{"name":"smoke-task","namespace":"agents"},"status":{"phase":"Succeeded","message":"completed","jobName":"job-1","podName":"pod-1","results":{"branch":"feature/smoke","commit":"abc123","base-branch":"main","pr":"https://github.com/org/repo/pull/1","cost-usd":"0.12","input-tokens":"10","output-tokens":"20","summary":{"files":["src/index.ts"]}}}}
+          JSON
+            exit 0
+          fi
+
+          echo "unexpected kubectl args: $*" >&2
+          exit 1
+          EOF
+
+          chmod +x "$RUNNER_TEMP/bin/kubectl"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - id: smoke
+        uses: ./
+        with:
+          namespace: agents
+          task-name: smoke-task
+          type: codex
+          prompt: Smoke test the structured-input action path.
+          credentials-secret: codex-token
+          wait: "true"
+
+      - name: Assert Action Outputs
+        shell: bash
+        env:
+          RESULTS_JSON: ${{ steps.smoke.outputs.results_json }}
+        run: |
+          set -euo pipefail
+
+          test "${{ steps.smoke.outputs.task_name }}" = "smoke-task"
+          test "${{ steps.smoke.outputs.task_namespace }}" = "agents"
+          test "${{ steps.smoke.outputs.phase }}" = "Succeeded"
+          test "${{ steps.smoke.outputs.job_name }}" = "job-1"
+          test "${{ steps.smoke.outputs.pod_name }}" = "pod-1"
+          test "${{ steps.smoke.outputs.branch }}" = "feature/smoke"
+          test "${{ steps.smoke.outputs.commit }}" = "abc123"
+          test "${{ steps.smoke.outputs.base_branch }}" = "main"
+          test "${{ steps.smoke.outputs.pr }}" = "https://github.com/org/repo/pull/1"
+
+          node -e 'const results = JSON.parse(process.env.RESULTS_JSON); if (results.summary.files[0] !== "src/index.ts") process.exit(1);'
+
+  action-smoke-task-file:
+    name: Action Task File Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Task Manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p .github/testdata
+          cat > .github/testdata/task.yaml <<'EOF'
+          apiVersion: kelos.dev/v1alpha1
+          kind: Task
+          metadata:
+            name: task-file-smoke
+            namespace: file-namespace
+          spec:
+            type: codex
+            prompt: Smoke test the task-file action path.
+            credentials:
+              type: oauth
+              secretRef:
+                name: codex-token
+          EOF
+
+      - name: Install Kubectl Stub
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "KUBECTL_LOG=$RUNNER_TEMP/kubectl.log" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/kubectl" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          echo "$*" >> "${KUBECTL_LOG:?}"
+
+          if [[ "$1" == "version" && "$2" == "--client" ]]; then
+            echo "Client Version: v1.34.1"
+            exit 0
+          fi
+
+          if [[ "$1" == "create" ]]; then
+            echo "error: the namespace from the provided object \"file-namespace\" does not match the namespace \"default\". You must pass '--namespace=file-namespace' to perform this operation." >&2
+            exit 1
+          fi
+
+          if [[ "$1" == "apply" ]]; then
+            if [[ "${2:-}" == "-n" ]]; then
+              echo "apply unexpectedly received an explicit namespace: $*" >&2
+              exit 1
+            fi
+
+            cat <<'JSON'
+          {"apiVersion":"kelos.dev/v1alpha1","kind":"Task","metadata":{"name":"task-file-smoke","namespace":"file-namespace"},"status":{"phase":"Pending","results":{}}}
+          JSON
+            exit 0
+          fi
+
+          if [[ "$1" == "get" && "$2" == "tasks.kelos.dev" ]]; then
+            cat <<'JSON'
+          {"apiVersion":"kelos.dev/v1alpha1","kind":"Task","metadata":{"name":"task-file-smoke","namespace":"file-namespace"},"status":{"phase":"Succeeded","message":"completed","results":{"branch":"feature/task-file"}}}
+          JSON
+            exit 0
+          fi
+
+          echo "unexpected kubectl args: $*" >&2
+          exit 1
+          EOF
+
+          chmod +x "$RUNNER_TEMP/bin/kubectl"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - id: smoke
+        uses: ./
+        with:
+          namespace: default
+          task-file: .github/testdata/task.yaml
+          wait: "true"
+
+      - name: Assert Task File Behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "${{ steps.smoke.outputs.task_name }}" = "task-file-smoke"
+          test "${{ steps.smoke.outputs.task_namespace }}" = "file-namespace"
+          test "${{ steps.smoke.outputs.phase }}" = "Succeeded"
+          test "${{ steps.smoke.outputs.branch }}" = "feature/task-file"
+
+          if grep -q '^apply -n default ' "$KUBECTL_LOG"; then
+            echo "task-file apply unexpectedly forced -n default" >&2
+            exit 1
+          fi
